@@ -1,13 +1,11 @@
+const API_URL=import.meta.env.VITE_API_URL;
 import {useState,useEffect} from "react";
 import "./Synapse.css";
 import * as pdfjsLib from "pdfjs-dist";
 import Tesseract from "tesseract.js";
 import ReactMarkdown from "react-markdown";
 import axios from "axios";
-pdfjsLib.GlobalWorkerOptions.workerSrc=new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/build/pdf.worker.min.mjs",import.meta.url).toString();
 export default function Synapse(){
   const [title,setTitle]=useState("");
   const [content,setContent]=useState("");
@@ -25,12 +23,7 @@ export default function Synapse(){
   },[]);
   useEffect(()=>{
     localStorage.setItem("synapseTheme",JSON.stringify(darkMode));
-    if(darkMode){
-      document.body.classList.add("dark");
-    }
-    else{
-      document.body.classList.remove("dark");
-    }
+    document.body.classList.toggle("dark",darkMode);
   },[darkMode]);
   const stats={
     words:content.trim()?content.trim().split(/\s+/).length:0,
@@ -40,7 +33,7 @@ export default function Synapse(){
   };
   async function fetchNotes(){
     try{
-      const res=await axios.get("http://localhost:5050/api/notes");
+      const res=await axios.get(`${API_URL}/api/notes`);
       setNotesList(res.data);
     }
     catch(err){
@@ -50,16 +43,13 @@ export default function Synapse(){
   async function saveNote(){
     try{
       const note={
-        title: title.trim() || "Untitled",
-        content,
-        tags,
+        title:title.trim() || "Untitled",content,tags,
       };
       if(currentNoteId){
-        await axios.put(`http://localhost:5050/api/notes/${currentNoteId}`,note
-        );
+        await axios.put(`${API_URL}/api/notes/${currentNoteId}`,note);
       }
       else{
-        const res=await axios.post("http://localhost:5050/api/notes",note);
+        const res=await axios.post(`${API_URL}/api/notes`,note);
         setCurrentNoteId(res.data._id);
       }
       await fetchNotes();
@@ -88,8 +78,7 @@ export default function Synapse(){
     try{
       setResult("Generating summary");
       const res=await axios.post(
-        "http://localhost:5050/api/notes/summarize",
-        {
+        `${API_URL}/api/notes/summarize`,{
           text:content,
           noteId:currentNoteId
         }
@@ -104,8 +93,7 @@ export default function Synapse(){
   async function deleteNote(){
     if(!currentNoteId) return;
     try{
-      await axios.delete(`http://localhost:5050/api/notes/${currentNoteId}`
-      );
+      await axios.delete(`${API_URL}/api/notes/${currentNoteId}`);
       await fetchNotes();
       newNote();
     }
@@ -123,9 +111,7 @@ export default function Synapse(){
     }
   }
   function exportNote(){
-    const blob=new Blob([content],{
-      type:"text/plain",
-    });
+    const blob=new Blob([content],{type:"text/plain",});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
     a.download=(title || "note")+".txt";
@@ -137,18 +123,16 @@ export default function Synapse(){
     try{
       setResult("Reading PDF");
       const data=await file.arrayBuffer();
-      const pdf=await pdfjsLib.getDocument({ data }).promise;
+      const pdf=await pdfjsLib.getDocument({data}).promise;
       let text="";
       for(let num=1;num<=pdf.numPages;num++){
         const page=await pdf.getPage(num);
         const contentData=await page.getTextContent();
-        text+=contentData.items.map(item =>item.str).join(" ")+"\n\n";
+        text+=contentData.items.map(item=>item.str).join(" ")+"\n\n";
       }
-      setTitle(file.name.replace(".pdf",""));
+      setTitle(file.name.replace(/\.pdf$/i,""));
       setContent(text);
-      setResult(
-        `Imported ${pdf.numPages} pages`
-      );
+      setResult(`Imported ${pdf.numPages} pages`);
     }
     catch{
       setResult("PDF import failed");
@@ -159,8 +143,10 @@ export default function Synapse(){
     if(!file) return;
     try{
       setResult("OCR Processing");
-      const{ data }=await Tesseract.recognize(file,"eng");
-      setContent(prev=>prev +"\n\n--- OCR TEXT ---\n\n" +data.text);
+      const{data}=await Tesseract.recognize(file,"eng");
+      setContent(
+        prev=>prev+"\n\n--- OCR TEXT ---\n\n"+data.text
+      );
       setResult("OCR Complete");
     }
     catch{
@@ -171,7 +157,8 @@ export default function Synapse(){
     e.preventDefault();
     const file=e.dataTransfer.files[0];
     if(!file) return;
-    const fakeEvent={target:{
+    const fakeEvent={
+      target:{
         files:[file],
       },
     };
@@ -182,22 +169,26 @@ export default function Synapse(){
       importImage(fakeEvent);
     }
   }
-  const filtered=notesList.filter(note =>{
+  const filtered=notesList.filter(note=>{
     const q=searchInput.toLowerCase();
     return(
-      note.title.toLowerCase().includes(q) || (note.tags || "").toLowerCase().includes(q)
+      note.title.toLowerCase().includes(q) ||
+      (note.tags || "").toLowerCase().includes(q)
     );
   });
   return(
     <>
       <header className="header-synapse">
         <div className="site-title">
-        Synapse
+          Synapse
         </div>
         <div className="header-actions">
           <input
-            className="input-search-notes" placeholder="Search notes..." value={searchInput}
-            onChange={e =>setSearchInput(e.target.value)
+            className="input-search-notes"
+            placeholder="Search notes..."
+            value={searchInput}
+            onChange={e=>
+              setSearchInput(e.target.value)
             }
           />
           <button
@@ -209,18 +200,20 @@ export default function Synapse(){
             {darkMode?"Light":"Dark"}
           </button>
           <button
-            className="btn-main" onClick={newNote}
+            className="btn-main"
+            onClick={newNote}
           >
             New
           </button>
           <button
-            className="btn-main" onClick={saveNote}
+            className="btn-main"
+            onClick={saveNote}
           >
             Save
           </button>
         </div>
       </header>
-      <div className={darkMode ? "app dark" : "app"}>
+      <div className="app">
         <aside className="sidebar">
           <div className="panel">
             <div className="panel-title">
@@ -228,35 +221,38 @@ export default function Synapse(){
             </div>
             <div className="quick-actions">
               <button
-                className="action-btn" onClick={newNote}
+                className="action-btn"
+                onClick={newNote}
               >
                 New Note
               </button>
               <label className="action-btn">
                 Import Image
                 <input
-                  type="file" hidden accept="image/*"
-                  onChange={
-                    importImage
-                  }
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={importImage}
                 />
               </label>
               <label className="action-btn">
                 Import PDF
                 <input
-                  type="file" hidden accept=".pdf"
-                  onChange={
-                    importPdf
-                  }
+                  type="file"
+                  hidden
+                  accept=".pdf"
+                  onChange={importPdf}
                 />
               </label>
               <button
-                className="action-btn" onClick={copyNote}
+                className="action-btn"
+                onClick={copyNote}
               >
                 Copy
               </button>
               <button
-                className="action-btn" onClick={deleteNote}
+                className="action-btn"
+                onClick={deleteNote}
               >
                 Delete
               </button>
@@ -268,13 +264,12 @@ export default function Synapse(){
             </div>
             <div className="notes-list">
               {filtered.map(
-                (note,index) =>(
+                (note)=>(
                   <div
-                    key={note._id} className="note-item"
-                    onClick={() =>
-                      openNote(
-                        note
-                      )
+                    key={note._id}
+                    className="note-item"
+                    onClick={()=>
+                      openNote(note)
                     }
                   >
                     {note.title}
@@ -288,24 +283,27 @@ export default function Synapse(){
           </footer>
         </aside>
         <section
-          className="workspace" onDrop={handleDrop}
-          onDragOver={e =>
+          className="workspace"
+          onDrop={handleDrop}
+          onDragOver={e=>
             e.preventDefault()
           }
         >
           <div className="editor-panel">
             <input
-              className="note-title" value={title} placeholder="Title"
-              onChange={e =>
+              className="note-title"
+              value={title}
+              placeholder="Title"
+              onChange={e=>
                 setTitle(e.target.value)
               }
             />
             <input
-              className="note-title" value={tags} placeholder="Tags (comma separated)"
-              onChange={e =>
-                setTags(
-                  e.target.value
-                )
+              className="note-title"
+              value={tags}
+              placeholder="Tags (comma separated)"
+              onChange={e=>
+                setTags(e.target.value)
               }
             />
             <div className="live-stats">
@@ -337,26 +335,20 @@ export default function Synapse(){
             <div className="toolbar">
               <button
                 className="tool-btn"
-                onClick={
-                  summarize
-                }
+                onClick={summarize}
               >
                 Summarize
               </button>
               <button
                 className="tool-btn"
-                onClick={
-                  exportNote
-                }
+                onClick={exportNote}
               >
                 Export
               </button>
               <button
                 className="tool-btn"
-                onClick={() =>
-                  setPreview(
-                    !preview
-                  )
+                onClick={()=>
+                  setPreview(!preview)
                 }
               >
                 {preview?"Editor":"Preview"}
@@ -366,8 +358,7 @@ export default function Synapse(){
               <div
                 className="editor-area"
                 style={{
-                  overflow:
-                    "auto",
+                  overflow:"auto",
                 }}
               >
                 <ReactMarkdown>
@@ -379,7 +370,7 @@ export default function Synapse(){
                 className="editor-area"
                 value={content}
                 placeholder="Write your notes"
-                onChange={e =>
+                onChange={e=>
                   setContent(e.target.value)
                 }
               />

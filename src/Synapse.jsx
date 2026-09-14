@@ -6,16 +6,17 @@ import Tesseract from "tesseract.js";
 import ReactMarkdown from "react-markdown";
 import axios from "axios";
 pdfjsLib.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/build/pdf.worker.min.mjs",import.meta.url).toString();
-export default function Synapse(){
+export default function Synapse({user,onLogout}){
   const [title,setTitle]=useState("");
   const [content,setContent]=useState("");
   const [result,setResult]=useState("");
   const [notesList,setNotesList]=useState([]);
   const [searchInput,setSearchInput]=useState("");
   const [darkMode,setDarkMode]=useState(false);
-  const [preview,setPreview]=useState(false);
   const [tags,setTags]=useState("");
   const [currentNoteId,setCurrentNoteId]=useState(null);
+  const [profileOpen,setProfileOpen]=useState(false);
+  const [status,setStatus]=useState("");
   useEffect(()=>{
     fetchNotes();
     const theme=JSON.parse(localStorage.getItem("synapseTheme")) || false;
@@ -33,8 +34,10 @@ export default function Synapse(){
   };
   async function fetchNotes(){
     try{
-      const res=await axios.get(`${API_URL}/api/notes`);
-      setNotesList(res.data);
+      const res=await axios.get(`${API_URL}/api/notes`, {
+        withCredentials: true
+      });
+      setNotesList(Array.isArray(res.data) ? res.data : []);
     }
     catch(err){
       console.log(err);
@@ -42,14 +45,22 @@ export default function Synapse(){
   }
   async function saveNote(){
     try{
-      const note={
-        title:title.trim() || "Untitled",content,tags,
-      };
+      const note={title:title.trim() || "Untitled",content,tags,};
       if(currentNoteId){
-        await axios.put(`${API_URL}/api/notes/${currentNoteId}`,note);
+        await axios.put(`${API_URL}/api/notes/${currentNoteId}`,
+          note,
+          {
+            withCredentials: true
+          }
+        );
       }
       else{
-        const res=await axios.post(`${API_URL}/api/notes`,note);
+        const res=await axios.post(`${API_URL}/api/notes`,
+          note,
+          {
+            withCredentials: true
+          }
+        );
         setCurrentNoteId(res.data._id);
       }
       await fetchNotes();
@@ -72,15 +83,19 @@ export default function Synapse(){
     setContent("");
     setTags("");
     setResult("");
+    setStatus("");
   }
   async function summarize(){
     if(!content.trim()) return;
     try{
       setResult("Generating summary");
-      const res=await axios.post(
-        `${API_URL}/api/notes/summarize`,{
-          text:content,
-          noteId:currentNoteId
+      const res=await axios.post(`${API_URL}/api/notes/summarize`,
+        {
+          text: content,
+          noteId: currentNoteId
+        },
+        {
+          withCredentials: true
         }
       );
       setResult(res.data.summary);
@@ -91,31 +106,57 @@ export default function Synapse(){
     }
   }
   async function deleteNote(){
-    if(!currentNoteId) return;
-    try{
-      await axios.delete(`${API_URL}/api/notes/${currentNoteId}`);
-      await fetchNotes();
-      newNote();
+    if(!currentNoteId){
+      setStatus("Open a saved note first");
+      return;
     }
-    catch(err){
-      console.log(err);
+    try{
+      await axios.delete(`${API_URL}/api/notes/${currentNoteId}`,{
+        withCredentials:true
+      });
+      setNotesList(prev=>prev.filter(note=>note._id!==currentNoteId));
+      setCurrentNoteId(null);
+      setTitle("");
+      setContent("");
+      setTags("");
+      setResult("");
+      setStatus("Note deleted");
+    }
+    catch(error){
+      console.log("DELETE NOTE ERROR:",error);
+      setStatus("Delete failed");
     }
   }
   async function copyNote(){
     try{
-      await navigator.clipboard.writeText(content);
-      setResult("Copied");
+      if(!result.trim() || result === "Generating summary"){
+        setStatus("Generate a summary first");
+        return;
+      }
+      const plainText=result.replace(/^#{1,6}\s*/gm,"").replace(/\*\*\*(.*?)\*\*\*/gs,"$1").replace(/\*\*(.*?)\*\*/gs,"$1").replace(/\*(.*?)\*/gs,"$1").replace(/^\s*[-*+]\s+/gm,"").replace(/^\s*\d+\.\s+/gm,"").trim();
+      await navigator.clipboard.writeText(plainText);
+      setStatus("Copied");
     }
-    catch{
-      setResult("Copy failed");
+    catch(error){
+      console.log(error);
+      setStatus("Copy failed");
     }
   }
   function exportNote(){
-    const blob=new Blob([content],{type:"text/plain",});
+    if(!result.trim() || result === "Generating summary"){
+      setStatus("Generate a summary first");
+      return;
+    }
+    const plainText=result.replace(/^#{1,6}\s*/gm, "").replace(/\*\*\*(.*?)\*\*\*/gs, "$1").replace(/\*\*(.*?)\*\*/gs, "$1").replace(/\*(.*?)\*/gs, "$1").replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*\d+\.\s+/gm, "").trim();
+    const blob=new Blob([plainText],{
+      type: "text/plain"
+    });
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
-    a.download=(title || "note")+".txt";
+    a.download=(title || "summary")+"-summary.txt";
     a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus("Summary exported");
   }
   async function importPdf(e){
     const file=e.target.files[0];
@@ -128,13 +169,45 @@ export default function Synapse(){
       for(let num=1;num<=pdf.numPages;num++){
         const page=await pdf.getPage(num);
         const contentData=await page.getTextContent();
-        text+=contentData.items.map(item=>item.str).join(" ")+"\n\n";
+        text+=contentData.items.map(item => item.str).join(" ")+"\n\n";
       }
-      setTitle(file.name.replace(/\.pdf$/i,""));
-      setContent(text);
-      setResult(`Imported ${pdf.numPages} pages`);
+      if(text.trim().length>20){
+        setTitle(file.name.replace(/\.pdf$/i, ""));
+        setContent(text);
+        setResult(`Imported ${pdf.numPages} pages`);
+        return;
+      }
+      console.log("Starting OCR");
+      let ocrText="";
+      for(let num=1;num<=pdf.numPages;num++){
+        const page=await pdf.getPage(num);
+        const viewport=page.getViewport({scale: 2});
+        const canvas=document.createElement("canvas");
+        const context=canvas.getContext("2d");
+        canvas.width=viewport.width;
+        canvas.height=viewport.height;
+        await page.render({canvasContext: context,viewport: viewport}).promise;
+        const {data: ocrData}=await Tesseract.recognize(canvas,"eng",{
+            logger:info=>{
+              if(info.status==="recognizing text"){
+                console.log(`OCR page ${num}:`,Math.round(info.progress * 100)+"%");
+              }
+            }
+          }
+        );
+        ocrText+=ocrData.text+"\n\n";
+      }
+      console.log("OCR TEXT LENGTH:",ocrText.trim().length);
+      if(!ocrText.trim()){
+        setResult("No readable text found in PDF");
+        return;
+      }
+      setTitle(file.name.replace(/\.pdf$/i, ""));
+      setContent(ocrText);
+      setResult(`Imported ${pdf.numPages} pages using OCR`);
     }
-    catch{
+    catch(error){
+      console.error("PDF IMPORT ERROR:",error);
       setResult("PDF import failed");
     }
   }
@@ -144,9 +217,7 @@ export default function Synapse(){
     try{
       setResult("OCR Processing");
       const{data}=await Tesseract.recognize(file,"eng");
-      setContent(
-        prev=>prev+"\n\n--- OCR TEXT ---\n\n"+data.text
-      );
+      setContent(prev=>prev+"\n\n--- OCR TEXT ---\n\n"+data.text);
       setResult("OCR Complete");
     }
     catch{
@@ -172,8 +243,7 @@ export default function Synapse(){
   const filtered=notesList.filter(note=>{
     const q=searchInput.toLowerCase();
     return(
-      note.title.toLowerCase().includes(q) ||
-      (note.tags || "").toLowerCase().includes(q)
+      note.title.toLowerCase().includes(q) || (note.tags || "").toLowerCase().includes(q)
     );
   });
   return(
@@ -211,6 +281,47 @@ export default function Synapse(){
           >
             Save
           </button>
+          <div className="profile-container">
+          <button
+            className="profile-avatar"
+            onClick={()=>setProfileOpen(!profileOpen)}
+            title="Profile"
+          >
+            {user?.initials || user?.name?.charAt(0).toUpperCase() || "U"}
+          </button>
+          {profileOpen && (
+            <div className="profile-card">
+              <div className="profile-card-header">
+                <div className="profile-large-avatar">
+                  {user?.initials || user?.name?.charAt(0).toUpperCase() || "U"}
+                </div>
+                <div>
+                  <h3>{user?.name || "Synapse User"}</h3>
+                  <p>{user?.email || ""}</p>
+                </div>
+              </div>
+              <div className="profile-info">
+                <div className="profile-row">
+                  <span>Role</span>
+                  <strong>{user?.role || "Synapse User"}</strong>
+                </div>
+                <div className="profile-row">
+                  <span>Status</span>
+                  <strong className="profile-status">
+                    <span></span>
+                    Active
+                  </strong>
+                </div>
+              </div>
+              <button
+                className="profile-signout"
+                onClick={onLogout}
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
         </div>
       </header>
       <div className="app">
@@ -335,7 +446,9 @@ export default function Synapse(){
             <div className="toolbar">
               <button
                 className="tool-btn"
-                onClick={summarize}
+                onClick={() => {
+                  summarize();
+                }}
               >
                 Summarize
               </button>
@@ -345,36 +458,15 @@ export default function Synapse(){
               >
                 Export
               </button>
-              <button
-                className="tool-btn"
-                onClick={()=>
-                  setPreview(!preview)
-                }
-              >
-                {preview?"Editor":"Preview"}
-              </button>
             </div>
-            {preview?(
-              <div
-                className="editor-area"
-                style={{
-                  overflow:"auto",
-                }}
-              >
-                <ReactMarkdown>
-                  {content}
-                </ReactMarkdown>
-              </div>
-            ):(
-              <textarea
-                className="editor-area"
-                value={content}
-                placeholder="Write your notes"
-                onChange={e=>
-                  setContent(e.target.value)
-                }
-              />
-            )}
+            <textarea
+              className="editor-area"
+              value={content}
+              placeholder="Write your notes"
+              onChange={e=>
+                setContent(e.target.value)
+              }
+            />
             {result && (
               <div className="ai-result">
                 <ReactMarkdown>
